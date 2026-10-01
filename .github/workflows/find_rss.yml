@@ -1,0 +1,62 @@
+name: Find RSS By Name
+
+on:
+  workflow_dispatch:
+    inputs:
+      podcast_name:
+        description: "שם הפודקאסט לחיפוש (או קישור Apple Podcasts / כתובת RSS)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: find-rss
+  cancel-in-progress: false
+
+jobs:
+  find-rss:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests feedparser
+
+      - name: Run search
+        env:
+          PODCAST_NAME: ${{ inputs.podcast_name }}
+          # אופציונלי: מפתחות חינמיים מ-podcastindex.org. אם לא קיימים, המקור מדולג.
+          PODCASTINDEX_KEY: ${{ secrets.PODCASTINDEX_KEY }}
+          PODCASTINDEX_SECRET: ${{ secrets.PODCASTINDEX_SECRET }}
+        run: python find_rss_by_name.py
+
+      - name: Load environment variables from Python
+        run: cat env_output.env >> "$GITHUB_ENV"
+
+      - name: Create search Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$SEARCH_TAG" results.txt \
+            --title "$SEARCH_TITLE" \
+            --notes-file release_notes.md \
+            --latest=false
+
+      - name: Keep only the newest 100 searches
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          KEEP=100
+          OLD=$(gh release list --limit 1000 --json tagName,createdAt \
+            --jq "[.[] | select(.tagName | startswith(\"search-\"))] | sort_by(.createdAt) | reverse | .[$KEEP:] | .[].tagName")
+
+          for tag in $OLD; do
+            echo "מוחק חיפוש ישן: $tag"
+            gh release delete "$tag" --cleanup-tag --yes
+          done
